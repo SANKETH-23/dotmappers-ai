@@ -45,13 +45,22 @@ Rules:
 - For "how many" → operation "count".
 - For "average/mean" → operation "avg" with target.
 - For "which agent has the most/least" → operation "groupby_count" with group_by "agent_id".
-  If the question mentions "resolved", add filter {"status": "Resolved"}.
-  If the question mentions "open", add filter {"status": "Open"}.
 - For "show me / list / which tickets" → operation "list".
-- "created_at" filters may use ISO format dates ("2024-03-01").
-- For relative dates ("this month", "this week", "today"), use the DATASET CONTEXT
-  provided in the question — NOT the real-world current date.
-  Represent date filters as ">=YYYY-MM-DD" or "<=YYYY-MM-DD" strings.
+
+NEGATION AND SLA RULES (very important):
+- "not resolved" means status is NOT "Resolved". Use filter {"status": ["Open", "Escalated"]}.
+- "unresolved" / "still open" / "not yet resolved" → status in ["Open", "Escalated"].
+- "not resolved within N hours" is NOT a status filter by itself. It means:
+    status in ["Open", "Escalated"]  (unresolved tickets)
+    AND they are older than N hours relative to the dataset's latest timestamp.
+  Represent as: filters {"status": ["Open", "Escalated"]} — the executor handles the age.
+- "resolved within N hours" (WITHOUT "not") → status = "Resolved" AND resolution_time_hrs <= N.
+- Do NOT add {"status": "Resolved"} when the question contains "not resolved" or "unresolved".
+
+RELATIVE DATES:
+- For "this month", "this week", "today", use the DATASET CONTEXT — NOT the real-world date.
+- Represent date filters as ">=YYYY-MM-DD" or "<=YYYY-MM-DD" strings.
+
 - If unsure, default to "list" with empty filters.
 - Return ONLY the JSON. No explanation, no markdown, no backticks.
 """
@@ -85,6 +94,22 @@ def _extract_json(text: str) -> dict[str, Any]:
     return json.loads(match.group(0))
 
 
+def _fix_negation(question: str, plan: dict) -> dict:
+    """
+    Post-process the LLM plan to catch common negation mistakes.
+    The small LLM often drops 'not' from 'not resolved'.
+    """
+    q = question.lower()
+    filters = plan.get("filters") or {}
+
+    has_negation = ("not resolved" in q or "unresolved" in q or "not yet resolved" in q)
+    if has_negation and filters.get("status") == "Resolved":
+        filters["status"] = ["Open", "Escalated"]
+
+    plan["filters"] = filters
+    return plan
+
+
 def plan_query(
     question: str,
     df: pd.DataFrame | None = None,
@@ -92,8 +117,9 @@ def plan_query(
 ) -> dict[str, Any]:
     """
     Ask the LLM to convert a question into a structured query plan.
-    Injects the dataset's date range so relative dates ("this month") resolve correctly.
+    Injects the dataset's date range so relative dates resolve correctly.
     Retries with a correction prompt if the LLM returns invalid JSON.
+    Post-processes to catch negation mistakes.
     """
     context = _dataset_context(df) if df is not None else ""
     full_question = f"{context}\nUSER QUESTION: {question}" if context else question
@@ -105,7 +131,8 @@ def plan_query(
         prompt = full_question if not correction else f"{full_question}\n\n{correction}"
         raw = ask_llm(prompt, system=SYSTEM_PROMPT, temperature=0.0)
         try:
-            return _extract_json(raw)
+            plan = _extract_json(raw)
+            return _fix_negation(question, plan)
         except (ValueError, json.JSONDecodeError) as e:
             last_error = e
             correction = (
@@ -246,6 +273,7 @@ if __name__ == "__main__":
         "Which agent resolved the most tickets?",
         "What is the average customer rating for Technical category tickets?",
         "Show me all Critical tickets that are not resolved.",
+        "Show me all Critical tickets not resolved within 12 hours.",
         "Which agent resolved the most tickets this month?",
         "Are there any anomalies in resolution times this week?",
     ]
