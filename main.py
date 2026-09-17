@@ -47,6 +47,25 @@ class HealthResponse(BaseModel):
     columns: list[str]
 
 
+# ---------------------------------------------------------------- helpers
+
+def _records_json_safe(df: pd.DataFrame) -> list[dict]:
+    """Convert a DataFrame to a list of JSON-safe dicts (NaN → None, Timestamp → ISO string)."""
+    records = []
+    for _, row in df.iterrows():
+        rec = {}
+        for col in df.columns:
+            val = row[col]
+            if pd.isna(val):
+                rec[col] = None
+            elif isinstance(val, pd.Timestamp):
+                rec[col] = val.isoformat()
+            else:
+                rec[col] = val
+        records.append(rec)
+    return records
+
+
 # ---------------------------------------------------------------- endpoints
 
 @app.get("/health", response_model=HealthResponse)
@@ -85,9 +104,5 @@ def tickets(
     if category:
         df = df[df["category"] == category]
     df = df.head(limit)
-    # Convert NaN → None for JSON compliance
-    records = df.where(pd.notna(df), None).to_dict(orient="records")
-    for rec in records:
-        if isinstance(rec.get("created_at"), pd.Timestamp):
-            rec["created_at"] = rec["created_at"].isoformat()
+    records = _records_json_safe(df)
     return {"count": len(records), "tickets": records}

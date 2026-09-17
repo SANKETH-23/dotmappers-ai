@@ -49,12 +49,30 @@ Rules:
   If the question mentions "open", add filter {"status": "Open"}.
 - For "show me / list / which tickets" → operation "list".
 - "created_at" filters may use ISO format dates ("2024-03-01").
+- For relative dates ("this month", "this week", "today"), use the DATASET CONTEXT
+  provided in the question — NOT the real-world current date.
+  Represent date filters as ">=YYYY-MM-DD" or "<=YYYY-MM-DD" strings.
 - If unsure, default to "list" with empty filters.
 - Return ONLY the JSON. No explanation, no markdown, no backticks.
 """
 
 
-# ---------------------------------------------------------------- LLM call
+# ---------------------------------------------------------------- helpers
+
+def _dataset_context(df: pd.DataFrame) -> str:
+    """Build a short text describing the dataset's date range and categories."""
+    min_date = df["created_at"].min()
+    max_date = df["created_at"].max()
+    return (
+        f"\nDATASET CONTEXT (use this to resolve relative dates):\n"
+        f"- The dataset covers {min_date:%Y-%m-%d} to {max_date:%Y-%m-%d}.\n"
+        f"- Treat 'today', 'now', 'this week', and 'this month' as the dataset's "
+        f"LATEST date ({max_date:%Y-%m-%d}), NOT the real-world current date.\n"
+        f"- 'This month' means {max_date:%Y-%m}. 'Last month' means the month "
+        f"before {max_date:%Y-%m}.\n"
+        f"- 'This week' means the 7 days ending on {max_date:%Y-%m-%d}.\n"
+    )
+
 
 def _extract_json(text: str) -> dict[str, Any]:
     """LLM sometimes wraps JSON in prose or backticks. Extract it."""
@@ -67,10 +85,38 @@ def _extract_json(text: str) -> dict[str, Any]:
     return json.loads(match.group(0))
 
 
-def plan_query(question: str) -> dict[str, Any]:
-    """Ask the LLM to convert a question into a structured query plan."""
-    raw = ask_llm(question, system=SYSTEM_PROMPT, temperature=0.0)
-    return _extract_json(raw)
+def plan_query(
+    question: str,
+    df: pd.DataFrame | None = None,
+    max_retries: int = 2,
+) -> dict[str, Any]:
+    """
+    Ask the LLM to convert a question into a structured query plan.
+    Injects the dataset's date range so relative dates ("this month") resolve correctly.
+    Retries with a correction prompt if the LLM returns invalid JSON.
+    """
+    context = _dataset_context(df) if df is not None else ""
+    full_question = f"{context}\nUSER QUESTION: {question}" if context else question
+
+    correction = ""
+    last_error: Exception | None = None
+
+    for attempt in range(max_retries + 1):
+        prompt = full_question if not correction else f"{full_question}\n\n{correction}"
+        raw = ask_llm(prompt, system=SYSTEM_PROMPT, temperature=0.0)
+        try:
+            return _extract_json(raw)
+        except (ValueError, json.JSONDecodeError) as e:
+            last_error = e
+            correction = (
+                f"Your previous response was invalid JSON. Error: {e}. "
+                f"Return ONLY a valid JSON object matching the schema. "
+                f"No prose, no markdown, no backticks."
+            )
+
+    raise ValueError(
+        f"LLM failed to produce valid JSON after {max_retries + 1} attempts: {last_error}"
+    )
 
 
 # ---------------------------------------------------------------- executor
@@ -79,15 +125,40 @@ def _apply_filters(df: pd.DataFrame, filters: dict[str, Any]) -> pd.DataFrame:
     for col, val in (filters or {}).items():
         if col not in df.columns:
             continue
+
+        # Date filters with operators (">=2024-03-01", "<=2024-03-15", etc.)
+        if col == "created_at" and isinstance(val, str) and val[:2] in (">=", "<=", ">", "<", "=="):
+            op = val[:2] if val[:2] in (">=", "<=") else val[0]
+            date_str = val[len(op):].strip()
+            try:
+                target = pd.to_datetime(date_str)
+            except Exception:
+                continue
+            if op == ">=":
+                df = df[df["created_at"] >= target]
+            elif op == "<=":
+                df = df[df["created_at"] <= target]
+            elif op == ">":
+                df = df[df["created_at"] > target]
+            elif op == "<":
+                df = df[df["created_at"] < target]
+            elif op == "==":
+                df = df[df["created_at"].dt.strftime("%Y-%m-%d") == date_str[:10]]
+            continue
+
+        # List membership
         if isinstance(val, list):
             df = df[df[col].isin(val)]
-        elif col == "created_at":
-            if isinstance(val, str) and val.startswith((">", "<", "=")):
-                df = df.query(f"created_at {val}")
-            else:
-                df = df[df["created_at"].dt.strftime("%Y-%m-%d") == str(val)[:10]]
-        else:
-            df = df[df[col] == val]
+            continue
+
+        # Exact date match
+        if col == "created_at":
+            df = df[df["created_at"].dt.strftime("%Y-%m-%d") == str(val)[:10]]
+            continue
+
+        # Default: equality
+        df = df[df[col] == val]
+
     return df
 
 
@@ -162,7 +233,7 @@ def answer_question(question: str, df: pd.DataFrame | None = None) -> dict:
     if df is None:
         df = load_tickets()
     try:
-        plan = plan_query(question)
+        plan = plan_query(question, df=df)
         answer = execute_plan(df, plan)
         return {"question": question, "plan": plan, "answer": answer}
     except Exception as e:
@@ -175,6 +246,8 @@ if __name__ == "__main__":
         "Which agent resolved the most tickets?",
         "What is the average customer rating for Technical category tickets?",
         "Show me all Critical tickets that are not resolved.",
+        "Which agent resolved the most tickets this month?",
+        "Are there any anomalies in resolution times this week?",
     ]
     df = load_tickets()
     for q in samples:

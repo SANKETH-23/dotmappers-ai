@@ -325,7 +325,7 @@ with tab_query:
             label_visibility="collapsed",
         )
     with col2:
-        ask_clicked = st.button("Ask ✨", use_container_width=True, type="primary")
+        ask_clicked = st.button("Ask ✨", width="stretch", type="primary")
 
     # Example chips → set question via session state
     for ex in examples:
@@ -405,7 +405,7 @@ with tab_anomalies:
                         df = df[cols]
 
                         st.markdown('<div class="section-title">📌 Flagged tickets</div>', unsafe_allow_html=True)
-                        st.dataframe(df, use_container_width=True, height=420)
+                        st.dataframe(df, width="stretch", height=420)
                     else:
                         st.success("No anomalies detected.")
                 else:
@@ -436,7 +436,7 @@ with tab_browse:
         if r.ok:
             data = r.json()
             st.caption(f"Showing **{data['count']}** ticket(s)")
-            st.dataframe(pd.DataFrame(data["tickets"]), use_container_width=True, height=500)
+            st.dataframe(pd.DataFrame(data["tickets"]), width="stretch", height=500)
         else:
             st.error(f"API error {r.status_code}")
     except Exception as e:
