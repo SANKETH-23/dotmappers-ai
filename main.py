@@ -39,6 +39,8 @@ class QueryResponse(BaseModel):
     question: str
     plan: dict | None
     answer: str
+    data: list[dict] | None = None
+    columns: list[str] | None = None
 
 
 class HealthResponse(BaseModel):

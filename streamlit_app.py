@@ -3,11 +3,30 @@ Modern Streamlit UI for the Support Ticket AI system.
 Talks to the FastAPI backend over HTTP.
 """
 
+import re
 import requests
 import streamlit as st
 import pandas as pd
 
 API = "http://127.0.0.1:8080"
+
+
+def _md_to_html(text: str) -> str:
+    """Convert basic markdown (**bold**, `code`, _italic_, line breaks) to HTML."""
+    # Escape raw HTML first (safety)
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    # Bold
+    text = re.sub(r"\*\*(.+?)\*\*", r"<strong>\1</strong>", text)
+    # Inline code
+    text = re.sub(r"`(.+?)`", r"<code>\1</code>", text)
+    # Italic
+    text = re.sub(r"_(.+?)_", r"<em>\1</em>", text)
+    # Markdown line breaks (two spaces + newline) → <br>
+    text = text.replace("  \n", "<br>")
+    # Plain newlines → <br>
+    text = text.replace("\n", "<br>")
+    return text
+
 
 # ------------------------------------------------------------------ page config
 st.set_page_config(
@@ -21,7 +40,6 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* ---------- fonts & background ---------- */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
     html, body, [class*="css"] {
@@ -35,12 +53,10 @@ st.markdown(
             #f8fafc;
     }
 
-    /* ---------- hide only the menu and footer, keep header + sidebar toggle ---------- */
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     [data-testid="stStatusWidget"] {visibility: hidden;}
 
-    /* ---------- hero ---------- */
     .hero {
         padding: 2.5rem 2rem 2rem 2rem;
         border-radius: 20px;
@@ -59,7 +75,6 @@ st.markdown(
         font-size: 1.05rem;
         opacity: 0.92;
         margin: 0;
-        font-weight: 400;
     }
     .hero .badge {
         display: inline-block;
@@ -74,7 +89,6 @@ st.markdown(
         text-transform: uppercase;
     }
 
-    /* ---------- metric cards ---------- */
     .metric-row {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
@@ -84,7 +98,7 @@ st.markdown(
     .metric-card {
         background: white;
         border-radius: 16px;
-        padding: 1.25rem 1.25rem 1.1rem 1.25rem;
+        padding: 1.25rem;
         border: 1px solid #e5e7eb;
         box-shadow: 0 4px 12px -6px rgba(0,0,0,0.06);
         transition: transform 0.15s ease, box-shadow 0.15s ease;
@@ -113,18 +127,13 @@ st.markdown(
         margin-top: 0.3rem;
     }
 
-    /* ---------- section headers ---------- */
     .section-title {
         font-size: 1.15rem;
         font-weight: 700;
         color: #111827;
         margin: 1.5rem 0 0.75rem 0;
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
     }
 
-    /* ---------- example chips ---------- */
     .chip {
         display: inline-block;
         background: #eef2ff;
@@ -137,7 +146,6 @@ st.markdown(
         border: 1px solid #e0e7ff;
     }
 
-    /* ---------- answer card ---------- */
     .answer-card {
         background: linear-gradient(135deg, #ecfdf5 0%, #f0fdf4 100%);
         border: 1px solid #a7f3d0;
@@ -149,32 +157,7 @@ st.markdown(
         color: #065f46;
         line-height: 1.6;
     }
-    .answer-card strong { color: #064e3b; }
 
-    /* ---------- plan card ---------- */
-    .plan-card {
-        background: #f9fafb;
-        border: 1px dashed #d1d5db;
-        border-radius: 12px;
-        padding: 1rem 1.25rem;
-        font-family: 'JetBrains Mono', ui-monospace, monospace;
-        font-size: 0.82rem;
-        color: #374151;
-    }
-
-    /* ---------- anomaly reason ---------- */
-    .reason-pill {
-        display: inline-block;
-        background: #fef3c7;
-        color: #92400e;
-        padding: 2px 10px;
-        border-radius: 999px;
-        font-size: 0.72rem;
-        font-weight: 600;
-        border: 1px solid #fde68a;
-    }
-
-    /* ---------- buttons ---------- */
     .stButton > button {
         background: linear-gradient(135deg, #4f46e5, #7c3aed) !important;
         color: white !important;
@@ -191,7 +174,6 @@ st.markdown(
         box-shadow: 0 8px 20px -6px rgba(79,70,229,0.6) !important;
     }
 
-    /* ---------- text input ---------- */
     .stTextInput > div > div > input {
         border-radius: 10px !important;
         border: 1px solid #e5e7eb !important;
@@ -204,7 +186,6 @@ st.markdown(
         box-shadow: 0 0 0 3px rgba(124,58,237,0.15) !important;
     }
 
-    /* ---------- tabs ---------- */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         background: transparent;
@@ -225,14 +206,12 @@ st.markdown(
         border-bottom: 2px solid #4f46e5 !important;
     }
 
-    /* ---------- dataframes ---------- */
     .stDataFrame {
         border-radius: 12px;
         overflow: hidden;
         border: 1px solid #e5e7eb;
     }
 
-    /* ---------- sidebar ---------- */
     section[data-testid="stSidebar"] {
         background: white;
         border-right: 1px solid #e5e7eb;
@@ -262,7 +241,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ------------------------------------------------------------------ sidebar: health
+# ------------------------------------------------------------------ sidebar
 with st.sidebar:
     st.markdown("### ⚙️ System Status")
 
@@ -285,8 +264,7 @@ with st.sidebar:
         st.metric("Columns", len(info.get("columns", [])))
     else:
         st.error("API offline")
-        st.caption("Start the backend with:")
-        st.code("uvicorn main:app --reload --port 8080", language="bash")
+        st.code("python start.py", language="bash")
 
     st.divider()
     st.markdown("### ℹ️ About")
@@ -327,7 +305,6 @@ with tab_query:
     with col2:
         ask_clicked = st.button("Ask ✨", width="stretch", type="primary")
 
-    # Example chips → set question via session state
     for ex in examples:
         if st.button(ex, key=f"chip_{ex}", help="Click to run this question"):
             question = ex
@@ -339,10 +316,27 @@ with tab_query:
                 r = requests.get(f"{API}/query", params={"q": question}, timeout=60)
                 if r.ok:
                     data = r.json()
+
+                    # Answer card (with markdown → HTML conversion)
                     st.markdown(
-                        f'<div class="answer-card">✅ <strong>Answer:</strong><br>{data["answer"]}</div>',
+                        f'<div class="answer-card">{_md_to_html(data["answer"])}</div>',
                         unsafe_allow_html=True,
                     )
+
+                    # If structured data is present, render a proper table
+                    if data.get("data"):
+                        df = pd.DataFrame(data["data"])
+                        if data.get("columns"):
+                            ordered = [c for c in data["columns"] if c in df.columns]
+                            df = df[ordered]
+                        st.dataframe(
+                            df,
+                            width="stretch",
+                            hide_index=True,
+                            height=min(420, 60 + len(df) * 35),
+                        )
+
+                    # Query plan
                     with st.expander("🔍 Query plan (generated by LLM)"):
                         st.json(data["plan"])
                 else:
@@ -405,7 +399,7 @@ with tab_anomalies:
                         df = df[cols]
 
                         st.markdown('<div class="section-title">📌 Flagged tickets</div>', unsafe_allow_html=True)
-                        st.dataframe(df, width="stretch", height=420)
+                        st.dataframe(df, width="stretch", height=420, hide_index=True)
                     else:
                         st.success("No anomalies detected.")
                 else:
@@ -436,7 +430,12 @@ with tab_browse:
         if r.ok:
             data = r.json()
             st.caption(f"Showing **{data['count']}** ticket(s)")
-            st.dataframe(pd.DataFrame(data["tickets"]), width="stretch", height=500)
+            st.dataframe(
+                pd.DataFrame(data["tickets"]),
+                width="stretch",
+                height=500,
+                hide_index=True,
+            )
         else:
             st.error(f"API error {r.status_code}")
     except Exception as e:
